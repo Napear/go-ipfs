@@ -411,12 +411,12 @@ func EnumerateChildrenAsync(ctx context.Context, getLinks GetLinks, c *cid.Cid, 
 	done := make(chan struct{})
 
 	var setlk sync.Mutex
-	
+
 	errChan := make(chan error)
 	fetchersCtx, cancel := context.WithCancel(ctx)
-	
+
 	defer cancel()
-	
+
 	for i := 0; i < FetchGraphConcurrency; i++ {
 		go func() {
 			for ic := range feed {
@@ -425,11 +425,11 @@ func EnumerateChildrenAsync(ctx context.Context, getLinks GetLinks, c *cid.Cid, 
 					errChan <- err
 					return
 				}
-				
+
 				setlk.Lock()
 				unseen := visit(ic)
 				setlk.Unlock()
-				
+
 				if unseen {
 					select {
 					case out <- links:
@@ -478,7 +478,7 @@ func EnumerateChildrenAsync(ctx context.Context, getLinks GetLinks, c *cid.Cid, 
 			}
 		case err := <-errChan:
 			return err
-		
+
 		case <-ctx.Done():
 			return ctx.Err()
 		}
