@@ -24,25 +24,31 @@ var log = logging.Logger("gc")
 //
 // The routine then iterates over every block in the blockstore and
 // deletes any block that is not found in the marked set.
-func GC(ctx context.Context, bs bstore.GCBlockstore, ls dag.LinkService, pn pin.Pinner, bestEffortRoots []*cid.Cid) (<-chan *cid.Cid, error) {
+//
+func GC(ctx context.Context, bs bstore.GCBlockstore, ls dag.LinkService, pn pin.Pinner, bestEffortRoots []*cid.Cid) (<-chan *cid.Cid, <-chan error) {
 	unlocker := bs.GCLock()
-
 	ls = ls.GetOfflineLinkService()
 
-	gcs, errs := ColoredSet(ctx, pn, ls, bestEffortRoots)
-	if errs != nil {
-		return nil, &UnsafeToContinueError{errs}
-	}
-
-	keychan, err := bs.AllKeysChan(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	output := make(chan *cid.Cid)
+	errOutput := make(chan error)
+
 	go func() {
+		defer close(errOutput)
 		defer close(output)
 		defer unlocker.Unlock()
+
+		gcs, errs := ColoredSet(ctx, pn, ls, bestEffortRoots)
+		if errs != nil {
+			errOutput <- &UnsafeToContinueError{errs}
+			return
+		}
+
+		keychan, err := bs.AllKeysChan(ctx)
+		if err != nil {
+			errOutput <- err
+			return
+		}
+
 		for {
 			select {
 			case k, ok := <-keychan:
@@ -52,8 +58,9 @@ func GC(ctx context.Context, bs bstore.GCBlockstore, ls dag.LinkService, pn pin.
 				if !gcs.Has(k) {
 					err := bs.DeleteBlock(k)
 					if err != nil {
-						log.Debugf("Error removing key from blockstore: %s", err)
-						return
+						errOutput <- err
+						//log.Debugf("Error removing key from blockstore: %s", err)
+						// continue as error is non-fatal
 					}
 					select {
 					case output <- k:
@@ -67,7 +74,7 @@ func GC(ctx context.Context, bs bstore.GCBlockstore, ls dag.LinkService, pn pin.
 		}
 	}()
 
-	return output, nil
+	return output, errOutput
 }
 
 func Descendants(ctx context.Context, getLinks dag.GetLinks, set *cid.Set, roots []*cid.Cid) error {
@@ -140,5 +147,19 @@ func (e *UnsafeToContinueError) Error() string {
 		buf.WriteString("\n")
 	}
 	buf.WriteString("aborting due to previous errors")
+	return buf.String()
+}
+
+type MultiError struct {
+	Errors []error
+}
+
+func (e *MultiError) Error() string {
+	var buf bytes.Buffer
+	for _, err := range e.Errors {
+		buf.WriteString(err.Error())
+		buf.WriteString("\n")
+	}
+	buf.WriteString("GC incomplete")
 	return buf.String()
 }

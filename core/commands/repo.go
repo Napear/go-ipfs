@@ -11,6 +11,7 @@ import (
 	bstore "github.com/ipfs/go-ipfs/blocks/blockstore"
 	cmds "github.com/ipfs/go-ipfs/commands"
 	corerepo "github.com/ipfs/go-ipfs/core/corerepo"
+	gc "github.com/ipfs/go-ipfs/pin/gc"
 	config "github.com/ipfs/go-ipfs/repo/config"
 	fsrepo "github.com/ipfs/go-ipfs/repo/fsrepo"
 	lockfile "github.com/ipfs/go-ipfs/repo/fsrepo/lock"
@@ -58,19 +59,35 @@ order to reclaim hard disk space.
 			return
 		}
 
-		gcOutChan, err := corerepo.GarbageCollectAsync(n, req.Context())
-		if err != nil {
-			res.SetError(err, cmds.ErrNormal)
-			return
-		}
+		gcOutChan, erro := corerepo.GarbageCollectAsync(n, req.Context())
 
 		outChan := make(chan interface{})
 		res.SetOutput((<-chan interface{})(outChan))
 
 		go func() {
 			defer close(outChan)
-			for k := range gcOutChan {
-				outChan <- k
+			var errors []error
+			for {
+				select {
+				case k, ok := <-gcOutChan:
+					if ok {
+						outChan <- k
+					} else {
+						return
+					}
+				case err := <-erro:
+					errors = append(errors, err)
+				}
+			}
+			switch len(errors) {
+			case 0:
+				return
+			case 1:
+				res.SetError(errors[0], cmds.ErrNormal)
+				return
+			default:
+				res.SetError(&gc.MultiError{errors}, cmds.ErrNormal)
+				return
 			}
 		}()
 	},
