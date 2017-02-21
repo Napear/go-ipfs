@@ -1,8 +1,8 @@
 package gc
 
 import (
-	"bytes"
 	"context"
+	"errors"
 
 	bstore "github.com/ipfs/go-ipfs/blocks/blockstore"
 	dag "github.com/ipfs/go-ipfs/merkledag"
@@ -37,9 +37,9 @@ func GC(ctx context.Context, bs bstore.GCBlockstore, ls dag.LinkService, pn pin.
 		defer close(output)
 		defer unlocker.Unlock()
 
-		gcs, errs := ColoredSet(ctx, pn, ls, bestEffortRoots)
-		if errs != nil {
-			errOutput <- &UnsafeToContinueError{errs}
+		gcs, err := ColoredSet(ctx, pn, ls, bestEffortRoots, errOutput)
+		if err != nil {
+			errOutput <- err
 			return
 		}
 
@@ -48,6 +48,8 @@ func GC(ctx context.Context, bs bstore.GCBlockstore, ls dag.LinkService, pn pin.
 			errOutput <- err
 			return
 		}
+
+		errors := false
 
 		for {
 			select {
@@ -58,6 +60,7 @@ func GC(ctx context.Context, bs bstore.GCBlockstore, ls dag.LinkService, pn pin.
 				if !gcs.Has(k) {
 					err := bs.DeleteBlock(k)
 					if err != nil {
+						errors = true
 						errOutput <- err
 						//log.Debugf("Error removing key from blockstore: %s", err)
 						// continue as error is non-fatal
@@ -71,6 +74,9 @@ func GC(ctx context.Context, bs bstore.GCBlockstore, ls dag.LinkService, pn pin.
 			case <-ctx.Done():
 				return
 			}
+		}
+		if errors {
+			errOutput <- IncompleteGC
 		}
 	}()
 
@@ -91,33 +97,37 @@ func Descendants(ctx context.Context, getLinks dag.GetLinks, set *cid.Set, roots
 	return nil
 }
 
-func ColoredSet(ctx context.Context, pn pin.Pinner, ls dag.LinkService, bestEffortRoots []*cid.Cid) (*cid.Set, []error) {
+func ColoredSet(ctx context.Context, pn pin.Pinner, ls dag.LinkService, bestEffortRoots []*cid.Cid, errOutput chan<- error) (*cid.Set, error) {
 	// KeySet currently implemented in memory, in the future, may be bloom filter or
 	// disk backed to conserve memory.
+	errors := false
 	gcs := cid.NewSet()
-	var errors []error
 	getLinks := func(ctx context.Context, cid *cid.Cid) ([]*node.Link, error) {
 		links, err := ls.GetLinks(ctx, cid)
 		if err != nil {
-			errors = append(errors, err)
+			errors = true
+			errOutput <- err
 		}
 		return links, nil
 	}
 	err := Descendants(ctx, getLinks, gcs, pn.RecursiveKeys())
 	if err != nil {
-		errors = append(errors, err)
+		errors = true
+		errOutput <- err
 	}
 
 	bestEffortGetLinks := func(ctx context.Context, cid *cid.Cid) ([]*node.Link, error) {
 		links, err := ls.GetLinks(ctx, cid)
 		if err != nil && err != dag.ErrNotFound {
-			errors = append(errors, err)
+			errors = true
+			errOutput <- err
 		}
 		return links, nil
 	}
 	err = Descendants(ctx, bestEffortGetLinks, gcs, bestEffortRoots)
 	if err != nil {
-		errors = append(errors, err)
+		errors = true
+		errOutput <- err
 	}
 
 	for _, k := range pn.DirectKeys() {
@@ -126,40 +136,17 @@ func ColoredSet(ctx context.Context, pn pin.Pinner, ls dag.LinkService, bestEffo
 
 	err = Descendants(ctx, getLinks, gcs, pn.InternalPins())
 	if err != nil {
-		errors = append(errors, err)
+		errors = true
+		errOutput <- err
 	}
 
-	if errors != nil {
-		return nil, errors
+	if errors {
+		return nil, CoundNotFetchAllLinksError
 	} else {
 		return gcs, nil
 	}
 }
 
-type UnsafeToContinueError struct {
-	Errors []error
-}
+var CoundNotFetchAllLinksError = errors.New("could not retrieve some links, aborting")
 
-func (e *UnsafeToContinueError) Error() string {
-	var buf bytes.Buffer
-	for _, err := range e.Errors {
-		buf.WriteString(err.Error())
-		buf.WriteString("\n")
-	}
-	buf.WriteString("aborting due to previous errors")
-	return buf.String()
-}
-
-type MultiError struct {
-	Errors []error
-}
-
-func (e *MultiError) Error() string {
-	var buf bytes.Buffer
-	for _, err := range e.Errors {
-		buf.WriteString(err.Error())
-		buf.WriteString("\n")
-	}
-	buf.WriteString("GC incomplete")
-	return buf.String()
-}
+var IncompleteGC = errors.New("GC incomplete")

@@ -1,6 +1,7 @@
 package corerepo
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"time"
@@ -101,15 +102,37 @@ func GarbageCollect(n *core.IpfsNode, ctx context.Context) error {
 		case err := <-erro:
 			errs = append(errs, err)
 		case <-ctx.Done():
-			return ctx.Err()
+			errs = append(errs, ctx.Err())
 		}
 	}
 
-	if errs != nil {
-		return &gc.MultiError{errs}
+	switch len(errs) {
+	case 0:
+		return nil
+	case 1:
+		return errs[0]
+	default:
+		return NewMultiError(errs...)
 	}
+}
 
-	return nil
+func NewMultiError(errs ...error) *MultiError {
+	return &MultiError{errs[:len(errs)-1], errs[len(errs)-1]}
+}
+
+type MultiError struct {
+	Errors  []error
+	Summary error
+}
+
+func (e *MultiError) Error() string {
+	var buf bytes.Buffer
+	for _, err := range e.Errors {
+		buf.WriteString(err.Error())
+		buf.WriteString("\n")
+	}
+	buf.WriteString(e.Summary.Error())
+	return buf.String()
 }
 
 func GarbageCollectAsync(n *core.IpfsNode, ctx context.Context) (<-chan *KeyRemoved, <-chan error) {

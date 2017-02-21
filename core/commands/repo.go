@@ -11,7 +11,6 @@ import (
 	bstore "github.com/ipfs/go-ipfs/blocks/blockstore"
 	cmds "github.com/ipfs/go-ipfs/commands"
 	corerepo "github.com/ipfs/go-ipfs/core/corerepo"
-	gc "github.com/ipfs/go-ipfs/pin/gc"
 	config "github.com/ipfs/go-ipfs/repo/config"
 	fsrepo "github.com/ipfs/go-ipfs/repo/fsrepo"
 	lockfile "github.com/ipfs/go-ipfs/repo/fsrepo/lock"
@@ -86,7 +85,7 @@ order to reclaim hard disk space.
 				res.SetError(errors[0], cmds.ErrNormal)
 				return
 			default:
-				res.SetError(&gc.MultiError{errors}, cmds.ErrNormal)
+				res.SetError(corerepo.NewMultiError(errors...), cmds.ErrNormal)
 				return
 			}
 		}()
