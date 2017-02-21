@@ -3,6 +3,7 @@ package gc
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	bstore "github.com/ipfs/go-ipfs/blocks/blockstore"
 	dag "github.com/ipfs/go-ipfs/merkledag"
@@ -61,7 +62,7 @@ func GC(ctx context.Context, bs bstore.GCBlockstore, ls dag.LinkService, pn pin.
 					err := bs.DeleteBlock(k)
 					if err != nil {
 						errors = true
-						errOutput <- err
+						errOutput <- &CoultNotDeleteBlockError{k, err}
 						//log.Debugf("Error removing key from blockstore: %s", err)
 						// continue as error is non-fatal
 					}
@@ -76,7 +77,7 @@ func GC(ctx context.Context, bs bstore.GCBlockstore, ls dag.LinkService, pn pin.
 			}
 		}
 		if errors {
-			errOutput <- IncompleteGC
+			errOutput <- CouldNotDeleteSomeBlocksError
 		}
 	}()
 
@@ -106,7 +107,7 @@ func ColoredSet(ctx context.Context, pn pin.Pinner, ls dag.LinkService, bestEffo
 		links, err := ls.GetLinks(ctx, cid)
 		if err != nil {
 			errors = true
-			errOutput <- err
+			errOutput <- &CoultNotFetchLinksError{cid, err}
 		}
 		return links, nil
 	}
@@ -120,7 +121,7 @@ func ColoredSet(ctx context.Context, pn pin.Pinner, ls dag.LinkService, bestEffo
 		links, err := ls.GetLinks(ctx, cid)
 		if err != nil && err != dag.ErrNotFound {
 			errors = true
-			errOutput <- err
+			errOutput <- &CoultNotFetchLinksError{cid, err}
 		}
 		return links, nil
 	}
@@ -149,4 +150,22 @@ func ColoredSet(ctx context.Context, pn pin.Pinner, ls dag.LinkService, bestEffo
 
 var CoundNotFetchAllLinksError = errors.New("could not retrieve some links, aborting")
 
-var IncompleteGC = errors.New("GC incomplete")
+var CouldNotDeleteSomeBlocksError = errors.New("could not delete some blocks")
+
+type CoultNotFetchLinksError struct {
+	Key *cid.Cid
+	Err error
+}
+
+func (e *CoultNotFetchLinksError) Error() string {
+	return fmt.Sprintf("could not retrieve links for %s: %s", e.Key, e.Err)
+}
+
+type CoultNotDeleteBlockError struct {
+	Key *cid.Cid
+	Err error
+}
+
+func (e *CoultNotDeleteBlockError) Error() string {
+	return fmt.Sprintf("could not remove %s: %s", e.Key, e.Err)
+}
